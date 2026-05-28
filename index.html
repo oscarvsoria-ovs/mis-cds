@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mi Biblioteca Privada de CDs</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -18,19 +18,20 @@
         button {
             width: 100%;
             padding: 12px;
-            background-color: #3498db;
+            background-color: #2ecc71;
             color: white;
             border: none;
             border-radius: 5px;
             font-size: 16px;
             cursor: pointer;
             margin-bottom: 15px;
+            font-weight: bold;
         }
-        button:active { background-color: #2980b9; }
+        button:active { background-color: #27ae60; }
         #scanner-container {
             width: 100%;
-            height: 250px;
-            border: 2px solid #34495e;
+            height: 280px;
+            border: 3px solid #2c3e50;
             background-color: #000;
             overflow: hidden;
             position: relative;
@@ -38,7 +39,7 @@
             border-radius: 8px;
             margin-bottom: 15px;
         }
-        #scanner-container video {
+        video {
             width: 100%;
             height: 100%;
             object-fit: cover;
@@ -71,22 +72,22 @@
 <div class="container">
     <h1>Mi Discoteca</h1>
     
-    <button id="btn-scan">Escanear Código de Barras</button>
+    <button id="btn-scan">Iniciar Cámara y Escanear</button>
     
-    <div id="scanner-container"></div>
+    <div id="scanner-container">
+        <video id="video"></video>
+    </div>
     
     <h2>Mis CDs Guardados (<span id="cd-count">0</span>)</h2>
     <div id="library-list"></div>
 </div>
 
 <script>
-    // Configuración del Token de Discogs obtenido
     const DISCOGS_TOKEN = "VJFMxCRcwuYdQYnJlgLPVtQEvxNDlgRuMpTwnsBQ";
-    
     let library = JSON.parse(localStorage.getItem('my_cd_library')) || [];
+    let codeReader = null;
     let isScanning = false;
 
-    // Inicializar la interfaz cargando los CDs ya guardados
     updateLibraryUI();
 
     document.getElementById('btn-scan').addEventListener('click', () => {
@@ -100,45 +101,39 @@
     function startScanner() {
         const container = document.getElementById('scanner-container');
         container.style.display = 'block';
-        document.getElementById('btn-scan').innerText = "Cancelar Escaneo";
+        document.getElementById('btn-scan').innerText = "Detener Cámara";
+        document.getElementById('btn-scan').style.backgroundColor = "#e74c3c";
         isScanning = true;
 
-        Quagga.init({
-            inputs: { target: container },
-            decoder: {
-                readers: ["ean_reader", "upc_reader", "code_128_reader"] // Formatos típicos de CDs
-            },
-            locate: true
-        }, function(err) {
-            if (err) {
+        // Inicializamos el lector moderno de ZXing
+        codeReader = new ZXing.BrowserMultiFormatReader();
+        
+        // Forzamos al navegador a pedir la cámara trasera (environment) de forma nativa e infalible
+        codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
+            if (result) {
+                beep();
+                stopScanner();
+                buscarEnDiscogs(result.text);
+            }
+            if (err && !(err instanceof ZXing.NotFoundException)) {
                 console.error(err);
-                alert("Error al iniciar la cámara");
-                stopScanner();
-                return;
             }
-            Quagga.start();
-        });
-
-        // Evento que se dispara al detectar un código de barras
-        Quagga.onDetected((data) => {
-            const code = data.codeResult.code;
-            if (code) {
-                // Emitimos un pitido sutil usando la API de audio nativa
-                beep(); 
-                stopScanner();
-                buscarEnDiscogs(code);
-            }
+        }).catch(err => {
+            alert("Error directo de cámara: Asegúrate de dar los permisos en el navegador.");
+            stopScanner();
         });
     }
 
     function stopScanner() {
-        Quagga.stop();
+        if (codeReader) {
+            codeReader.reset();
+        }
         document.getElementById('scanner-container').style.display = 'none';
-        document.getElementById('btn-scan').innerText = "Escanear Código de Barras";
+        document.getElementById('btn-scan').innerText = "Iniciar Cámara y Escanear";
+        document.getElementById('btn-scan').style.backgroundColor = "#2ecc71";
         isScanning = false;
     }
 
-    // Consulta HTTP asíncrona a la API de Discogs
     function buscarEnDiscogs(barcode) {
         const url = `https://api.discogs.com/database/search?barcode=${barcode}&token=${DISCOGS_TOKEN}`;
 
@@ -146,9 +141,7 @@
             .then(response => response.json())
             .then(data => {
                 if (data.results && data.results.length > 0) {
-                    const result = data.results[0]; // Tomamos la coincidencia más exacta
-                    
-                    // Separamos el formato típico "Artista - Título" que devuelve Discogs
+                    const result = data.results[0];
                     let partes = result.title.split(' - ');
                     let artista = partes[0] || "Artista Desconocido";
                     let titulo = partes[1] || "Álbum Desconocido";
@@ -162,21 +155,19 @@
                         barcode: barcode
                     };
 
-                    // Validar si ya existe en la biblioteca para no duplicar
                     if (!library.some(item => item.id === nuevoCD.id)) {
-                        library.unshift(nuevoCD); // Añadir al principio de la lista
+                        library.unshift(nuevoCD);
                         localStorage.setItem('my_cd_library', JSON.stringify(library));
                         updateLibraryUI();
                     } else {
                         alert(`El álbum "${titulo}" ya está en tu biblioteca.`);
                     }
                 } else {
-                    alert(`No se encontraron datos para el código: ${barcode}`);
+                    alert(`No se encontraron datos en Discogs para el código: ${barcode}`);
                 }
             })
             .catch(error => {
-                console.error("Error en la conexión:", error);
-                alert("Error al conectar con la base de datos musical.");
+                alert("Error de conexión con el servidor musical.");
             });
     }
 
@@ -201,7 +192,6 @@
         });
     }
 
-    // Generador de audio simple para confirmar el escaneo
     function beep() {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = ctx.createOscillator();
