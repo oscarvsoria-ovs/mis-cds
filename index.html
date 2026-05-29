@@ -28,8 +28,21 @@
         }
         .btn-scan { background-color: #2ecc71; color: white; }
         .btn-scan:active { background-color: #27ae60; }
-        .btn-excel { background-color: #34495e; color: white; margin-top: 5px; }
-        .btn-excel:active { background-color: #2c3e50; }
+        
+        /* Panel de Archivos Locales */
+        .io-container {
+            background-color: #ebf3f9;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #aed6f1;
+            margin-bottom: 15px;
+        }
+        .io-title { font-weight: bold; font-size: 12px; margin-bottom: 8px; color: #2980b9; text-transform: uppercase; text-align: center; }
+        .grid-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .grid-buttons button { margin: 0; padding: 10px; font-size: 13px; }
+        .btn-save-json { background-color: #8e44ad; color: white; }
+        .btn-load-json { background-color: #e67e22; color: white; }
+        .btn-excel { background-color: #34495e; color: white; grid-column: span 2; margin-top: 4px; }
         
         /* Contenedor de Carga Manual */
         .manual-container {
@@ -113,6 +126,8 @@
             width: auto;
             margin: 0;
         }
+        /* Input de archivo oculto */
+        #file-input { display: none; }
     </style>
 </head>
 <body>
@@ -133,8 +148,16 @@
             <button id="btn-manual-search" class="btn-manual">Buscar</button>
         </div>
     </div>
-    
-    <button id="btn-excel" class="btn-excel">💾 Exportar biblioteca a Excel</button>
+
+    <div class="io-container">
+        <div class="io-title">Gestión de Base de Datos Local</div>
+        <div class="grid-buttons">
+            <button id="btn-save-json" class="btn-save-json">💾 Guardar Archivo .JSON</button>
+            <button id="btn-load-json" class="btn-load-json">📂 Cargar Archivo .JSON</button>
+            <button id="btn-excel" class="btn-excel">📊 Exportar Tabla a Excel (CSV)</button>
+        </div>
+        <input type="file" id="file-input" accept=".json">
+    </div>
     
     <h2>Mis CDs Guardados (<span id="cd-count">0</span>)</h2>
     
@@ -149,34 +172,63 @@
     let codeReader = null;
     let isScanning = false;
 
-    // Dibujar la interfaz inicial
     updateLibraryUI();
 
-    // Eventos de la interfaz
+    // Eventos
     document.getElementById('btn-scan').addEventListener('click', () => {
         if (isScanning) stopScanner(); else startScanner();
     });
-
     document.getElementById('btn-excel').addEventListener('click', exportToCSV);
+    document.getElementById('btn-save-json').addEventListener('click', saveAsJSON);
+    document.getElementById('btn-load-json').addEventListener('click', () => document.getElementById('file-input').click());
+    document.getElementById('file-input').addEventListener('change', loadFromJSON);
 
     document.getElementById('btn-manual-search').addEventListener('click', () => {
         const inputEl = document.getElementById('manual-barcode');
         const barcodeValue = inputEl.value.trim();
-        
-        if (barcodeValue === "") {
-            alert("Por favor, ingresá un número de código de barras.");
-            return;
-        }
+        if (barcodeValue === "") { alert("Por favor, ingresá un código."); return; }
         buscarEnDiscogs(barcodeValue);
         inputEl.value = ""; 
     });
 
     document.getElementById('search-input').addEventListener('input', (e) => {
-        const query = e.target.value.toLowerCase();
-        updateLibraryUI(query);
+        updateLibraryUI(e.target.value.toLowerCase());
     });
 
-    // Lógica del Escáner Óptico
+    // Guardar base de datos en un archivo físico JSON
+    function saveAsJSON() {
+        if (library.length === 0) { alert("No hay datos para guardar."); return; }
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(library, null, 2));
+        const downloadAnchor = document.createElement('a');
+        downloadAnchor.setAttribute("href", dataStr);
+        downloadAnchor.setAttribute("download", "biblioteca_cds.json");
+        document.body.appendChild(downloadAnchor);
+        downloadAnchor.click();
+        downloadAnchor.remove();
+    }
+
+    // Cargar base de datos desde un archivo físico JSON
+    function loadFromJSON(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            try {
+                const importedLibrary = JSON.parse(evt.target.result);
+                if (Array.isArray(importedLibrary)) {
+                    if (confirm(`¿Querés cargar ${importedLibrary.length} CDs? Esto reemplazará la lista actual del navegador.`)) {
+                        library = importedLibrary;
+                        localStorage.setItem('my_cd_library', JSON.stringify(library));
+                        updateLibraryUI();
+                    }
+                } else { alert("El formato del archivo no es válido."); }
+            } catch (err) { alert("Error al leer el archivo JSON."); }
+        };
+        reader.readAsText(file);
+        e.target.value = ''; // Resetear input
+    }
+
+    // Cámara y Escáner
     function startScanner() {
         const container = document.getElementById('scanner-container');
         container.style.display = 'block';
@@ -187,15 +239,8 @@
 
         codeReader = new ZXing.BrowserMultiFormatReader();
         codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
-            if (result) {
-                beep();
-                stopScanner();
-                buscarEnDiscogs(result.text);
-            }
-        }).catch(err => {
-            alert("Error al encender la cámara del dispositivo.");
-            stopScanner();
-        });
+            if (result) { beep(); stopScanner(); buscarEnDiscogs(result.text); }
+        }).catch(() => { alert("Error de cámara."); stopScanner(); });
     }
 
     function stopScanner() {
@@ -207,12 +252,10 @@
         isScanning = false;
     }
 
-    // Consulta de Datos a Discogs
     function buscarEnDiscogs(barcode) {
         const url = `https://api.discogs.com/database/search?barcode=${barcode}&token=${DISCOGS_TOKEN}`;
-
         fetch(url)
-            .then(response => response.json())
+            .then(res => res.json())
             .then(data => {
                 if (data.results && data.results.length > 0) {
                     const result = data.results[0];
@@ -234,17 +277,12 @@
                         localStorage.setItem('my_cd_library', JSON.stringify(library));
                         document.getElementById('search-input').value = ''; 
                         updateLibraryUI();
-                    } else {
-                        alert(`El álbum "${titulo}" ya está en tu biblioteca.`);
-                    }
-                } else {
-                    alert(`No se encontraron datos en Discogs para: ${barcode}`);
-                }
+                    } else { alert(`El álbum "${titulo}" ya está en tu biblioteca.`); }
+                } else { alert(`No se encontraron datos para: ${barcode}`); }
             })
-            .catch(() => alert("Error de comunicación con el servidor de Discogs."));
+            .catch(() => alert("Error de conexión con Discogs."));
     }
 
-    // Renderizado de las Tarjetas en Pantalla
     function updateLibraryUI(filterQuery = "") {
         const listContainer = document.getElementById('library-list');
         const countSpan = document.getElementById('cd-count');
@@ -274,38 +312,28 @@
     }
 
     function deleteCD(id) {
-        if (confirm("¿Seguro que querés eliminar este CD?")) {
+        if (confirm("¿Eliminar este CD?")) {
             library = library.filter(item => item.id !== id);
             localStorage.setItem('my_cd_library', JSON.stringify(library));
             updateLibraryUI(document.getElementById('search-input').value.toLowerCase());
         }
     }
 
-    // Exportación nativa a CSV (Compatible con Excel)
     function exportToCSV() {
-        if (library.length === 0) {
-            alert("No hay ningún CD guardado para exportar.");
-            return;
-        }
-        let csvContent = "\uFEFF"; 
-        csvContent += "Artista;Álbum;Año;Código de Barras;ID Discogs\n";
-
+        if (library.length === 0) { alert("No hay datos."); return; }
+        let csvContent = "\uFEFF" + "Artista;Álbum;Año;Código de Barras;ID Discogs\n";
         library.forEach(cd => {
             let artista = cd.artist.replace(/;/g, ',');
             let titulo = cd.title.replace(/;/g, ',');
             csvContent += `"${artista}";"${titulo}";"${cd.year}";"${cd.barcode}";"${cd.id}"\n`;
         });
-
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        
-        link.setAttribute("href", url);
+        link.setAttribute("href", URL.createObjectURL(blob));
         link.setAttribute("download", "mi_biblioteca_cds.csv");
-        link.style.visibility = 'hidden';
         document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
+        link.remove();
     }
 
     function beep() {
